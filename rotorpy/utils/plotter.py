@@ -3,6 +3,7 @@ from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 
 from rotorpy.utils.animate import animate
+from rotorpy.utils.camera_plotter import draw_camera_frustum, draw_camera_triad
 
 import os
 
@@ -13,7 +14,7 @@ Functions for showing the results from the simulator.
 
 class Plotter():
 
-    def __init__(self, results, world):
+    def __init__(self, results, world, camera=None):
 
         (self.time, self.x, self.x_des, self.v,
         self.v_des, self.q, self.q_des, self.w,
@@ -27,13 +28,36 @@ class Plotter():
 
         self.world = world
 
+        # Camera measurements, or None if no camera was specified for the run.
+        self.camera_measurements = results.get('camera_measurements', None)
+        # The camera sensor object itself, used to draw the frustum in animations.
+        self.camera = camera
+
         return
 
-    def plot_results(self, plot_mocap, plot_estimator, plot_imu, fname=None, save_dir=None, show=True):
+    def plot_results(self, plot_mocap, plot_estimator, plot_imu, plot_camera=True, fname=None, save_dir=None, show=True):
         """
         Plot the results
 
         """
+
+        if fname is not None:
+            fname = os.fspath(fname)
+            root_path = save_dir if save_dir is not None else os.path.join(
+                os.path.dirname(__file__), '..', 'data_out')
+            os.makedirs(os.path.dirname(os.path.abspath(os.path.join(root_path, fname))), exist_ok=True)
+
+        # Camera sensor: choose up to 4 sampled frames by timestamp -- equally
+        # spaced times across the captured span, snapped to the nearest frame.
+        # The snapshots appear in the 3D path figure below and in the camera
+        # measurements figure, which also marks their timestamps.
+        cam_sample_idx = None
+        frame_times = None
+        if plot_camera and self.camera_measurements is not None:
+            frame_times = self.camera_measurements['time']
+            n_frames = min(4, frame_times.shape[0])
+            t_samples = np.linspace(frame_times[0], frame_times[-1], n_frames)
+            cam_sample_idx = np.unique(np.abs(frame_times[:, None] - t_samples[None, :]).argmin(axis=0))
 
         # 3D Paths
         fig_3d = plt.figure('3D Path')
@@ -42,6 +66,18 @@ class Plotter():
         self.world.draw(ax)
         ax.plot3D(self.x[:,0], self.x[:,1], self.x[:,2], 'b.')
         ax.plot3D(self.x_des[:,0], self.x_des[:,1], self.x_des[:,2], 'k')
+
+        if cam_sample_idx is not None and self.camera is not None:
+            # Draw the camera pose/frustum at the sampled frame times. Frame
+            # indices are positions in the capture list, not the state
+            # history: map each frame's timestamp back to the history index.
+            extents = np.asarray(self.world.world['bounds']['extents'])
+            frustum_scale = 0.1 * np.max(extents[1::2] - extents[0::2])
+            for idx in cam_sample_idx:
+                j = int(np.argmin(np.abs(self.time - frame_times[idx])))
+                camera_pose = self.camera.compute_camera_pose({'x': self.x[j], 'q': self.q[j]})
+                draw_camera_frustum(ax, camera_pose, self.camera.intrinsics, scale=frustum_scale)
+                draw_camera_triad(ax, camera_pose, scale=0.5*frustum_scale)
 
         # Position and Velocity vs. Time
         (fig_posvel, axes) = plt.subplots(nrows=2, ncols=1, sharex=True, num='Pos/Vel vs Time')
@@ -159,6 +195,34 @@ class Plotter():
             ax.legend(('x','y','z'))
             ax.set_xlabel("time, s")
 
+        # Camera sensor: a figure showing up to 4 equally spaced frames over
+        # the simulation (top) and the number of visible features vs time
+        # (bottom), with vertical lines marking the sampled frame times.
+        if plot_camera and self.camera_measurements is not None:
+            cm = self.camera_measurements
+            sample_idx = cam_sample_idx
+
+            fig_cam = plt.figure('Camera Measurements vs Time', figsize=(16, 9))
+            fig_cam.clear()
+            gs = fig_cam.add_gridspec(2, n_frames, height_ratios=[2, 1])
+            for col, idx in enumerate(sample_idx):
+                ax = fig_cam.add_subplot(gs[0, col])
+                ax.imshow(cm['image'][idx], origin='upper', interpolation='nearest')
+                ax.set_axis_off()
+                ax.set_title('t = %.2f s' % cm['time'][idx])
+
+            ax_vis = fig_cam.add_subplot(gs[1, :])
+            ax_vis.plot(cm['time'], cm['visible_mask'].sum(axis=1), 'b.-')
+            for idx in sample_idx:
+                ax_vis.axvline(cm['time'][idx], color='k', linestyle='--', linewidth=1, alpha=0.6)
+            ax_vis.set_ylabel('# visible features')
+            ax_vis.set_xlabel('time, s')
+            ax_vis.grid('major')
+            fig_cam.tight_layout()
+
+            if fname is not None:
+                fig_cam.savefig(os.path.join(root_path, fname+'_camera.png'))
+
         if plot_estimator:
             if self.estimator_exists:
                 N_filter = self.filter_state.shape[1]
@@ -181,10 +245,6 @@ class Plotter():
 
         if fname is not None:
 
-            if save_dir is not None:
-                root_path = save_dir
-            else:
-                root_path = os.path.join(os.path.dirname(__file__),'..','data_out')
             fig_3d.savefig(os.path.join(root_path, fname+'_3dpath.png'))
             fig_posvel.savefig(os.path.join(root_path, fname+'_posvel.png'))
             fig_attrate.savefig(os.path.join(root_path, fname+'_attrate.png'))
@@ -211,9 +271,18 @@ class Plotter():
 
         """
 
+        # If camera measurements exist, include a live camera view panel in
+        # the animation showing the most recent frame at each timestep.
+        camera_images = None
+        camera_times = None
+        if self.camera_measurements is not None:
+            camera_images = self.camera_measurements['image']
+            camera_times = self.camera_measurements['time']
+
         # Animation (Slow)
         # Instead of viewing the animation live, you may provide a .mp4 filename to save.
-        ani = animate(self.time, self.x, self.R, self.wind, animate_wind, world=self.world, filename=fname)
+        ani = animate(self.time, self.x, self.R, self.wind, animate_wind, world=self.world, filename=fname,
+                      camera_images=camera_images, camera_times=camera_times, camera=self.camera)
         plt.show()
 
         return
@@ -268,7 +337,7 @@ class Plotter():
 
         return (time, x, x_des, v, v_des, q, q_des, w, s, s_des, M, T, wind, accel, gyro, accel_gt, x_mc, v_mc, q_mc, w_mc, filter_state, covariance, sd)
 
-def plot_map(ax, world_data, equal_aspect=True, color=None, edgecolor=None, alpha=1, world_bounds=True, axes=True):
+def plot_map(ax, world_data, equal_aspect=True, color=None, edgecolor=None, alpha=1, axes=True, *, world_bounds=True):
     """
     Plots the map in the world data in a top-down 2D view.
     Inputs:
@@ -303,11 +372,11 @@ def plot_map(ax, world_data, equal_aspect=True, color=None, edgecolor=None, alph
         ymin = block['extents'][2]
         ymax = block['extents'][3]
         if color is None:
-            building_color = tuple(block['color'])
+            building_color = block.get('color', 'k')
         else:
             building_color = color
         if edgecolor is None:
-            building_edge_color = tuple(block['color'])
+            building_edge_color = block.get('color', 'k')
         else:
             building_edge_color = edgecolor
         block_patch = Rectangle((xmin, ymin), (xmax-xmin), (ymax-ymin), linewidth=1, edgecolor=building_edge_color, facecolor=building_color, alpha=alpha, fill=True)
@@ -335,71 +404,6 @@ def plot_map(ax, world_data, equal_aspect=True, color=None, edgecolor=None, alph
 
     return
 
-def plot_map(ax, world_data, equal_aspect=True, color=None, edgecolor=None, alpha=1, axes=True):
-    """
-    Plots the map in the world data in a top-down 2D view.
-    Inputs:
-        ax: The axis to plot on
-        world_data: The world data to plot
-        equal_aspect: Determines if the aspect ratio of the plot should be equal.
-        color: The color of the buildings. If None (default), it will use the color of the buildings.
-        edgecolor: The edge color of the buildings. If None (default), it will use the color of the buildings.
-        alpha: The alpha value of the buildings. If None (default), it will use the color of the buildings.
-        world_bounds: Whether or not to plot the world bounds as a dashed line around the 2D plot.
-        axes: Whether or not to plot the axis labels
-    Outputs:
-        Plots the map in the axis of interest.
-    """
-    from matplotlib.patches import Rectangle
-
-    plot_xmin = world_data['bounds']['extents'][0]
-    plot_xmax = world_data['bounds']['extents'][1]
-    plot_ymin = world_data['bounds']['extents'][2]
-    plot_ymax = world_data['bounds']['extents'][3]
-
-    for block in world_data['blocks']:
-        xmin = block['extents'][0]
-        xmax = block['extents'][1]
-        ymin = block['extents'][2]
-        ymax = block['extents'][3]
-        if color is None:
-            try:
-                building_color = tuple(block['color'])
-            except:
-                building_color = 'k'
-        else:
-            building_color = color
-        if edgecolor is None:
-            try:
-                building_edge_color = tuple(block['color'])
-            except:
-                building_edge_color = 'k'
-        else:
-            building_edge_color = edgecolor
-        block_patch = Rectangle((xmin, ymin), (xmax-xmin), (ymax-ymin), linewidth=1, edgecolor=building_edge_color, facecolor=building_color, alpha=alpha, fill=True)
-        ax.add_patch(block_patch)
-
-        if xmin < plot_xmin:
-            plot_xmin = xmin
-        if xmax > plot_xmax:
-            plot_xmax = xmax
-        if ymin < plot_ymin:
-            plot_ymin = ymin
-        if ymax > plot_ymax:
-            plot_ymax = ymax
-
-    ax.set_xlim([plot_xmin, plot_xmax])
-    ax.set_ylim([plot_ymin, plot_ymax])
-
-    if axes:
-        ax.set_xlabel("X (m)")
-        ax.set_ylabel("Y (m)")
-
-    # Set the aspect ratio equal
-    if equal_aspect:
-        ax.set_aspect('equal')
-
-    return
 
 if __name__ == "__main__":
 

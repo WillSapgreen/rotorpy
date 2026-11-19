@@ -7,7 +7,7 @@ import time as clk
 from rotorpy.simulate import simulate, simulate_batch
 from rotorpy.utils.plotter import *
 from rotorpy.world import World
-from rotorpy.utils.postprocessing import unpack_sim_data
+from rotorpy.utils.postprocessing import unpack_sim_data, unpack_sim_data_batch
 from typing import Callable, List, Optional, Dict, Any, Union
 
 
@@ -39,6 +39,7 @@ class Environment():
         mocap = None,
         world        = None,
         estimator    = None,
+        camera       = None,
         sim_rate     = 100,
         safety_margin = 0.25,
     ):
@@ -63,6 +64,8 @@ class Environment():
             World environment object.
         estimator : Estimator, optional
             State estimator object.
+        camera : PinholeCamera sensor object, optional
+            if None no camera data is collected.
         sim_rate : int, default=100
             Simulation update frequency in Hz.
         safety_margin : float, default=0.25
@@ -73,8 +76,12 @@ class Environment():
         self.vehicle = vehicle
         self.controller = controller
         self.trajectory = trajectory
-
         self.safety_margin = safety_margin
+
+        # The camera is optional and is not defaulted: rendering is comparatively
+        # expensive, and there is nothing useful to render if the user did not
+        # ask for it. Frames are captured during run() at camera.frame_rate.
+        self.camera = camera
 
         if world is None:
             # If no world is specified, assume that it means that the intended world is free space.
@@ -135,6 +142,7 @@ class Environment():
             plot_mocap      = True,
             plot_estimator  = True,
             plot_imu        = True,
+            plot_camera     = True,
             animate_bool    = False,
             animate_wind    = False,
             verbose         = False,
@@ -168,6 +176,9 @@ class Environment():
         plot_imu : bool, default=True
             If True, plots IMU measurements.
 
+        plot_camera : bool, default=True
+            plots the camera frames and visibility statistics (if a camera was specified).
+
         animate_bool : bool, default=False
             If True, plays animation of vehicle state evolution.
 
@@ -188,30 +199,37 @@ class Environment():
         self.use_mocap = use_mocap
 
         start_time = clk.time()
-        (time, state, control, flat, imu_measurements, imu_gt, mocap_measurements, state_estimate, exit) = simulate(self.world,
-                                                                                                                    self.vehicle.initial_state,
-                                                                                                                    self.vehicle,
-                                                                                                                    self.controller,
-                                                                                                                    self.trajectory,
-                                                                                                                    self.wind_profile,
-                                                                                                                    self.imu,
-                                                                                                                    self.mocap,
-                                                                                                                    self.estimator,
-                                                                                                                    self.t_final,
-                                                                                                                    self.t_step,
-                                                                                                                    self.safety_margin,
-                                                                                                                    self.use_mocap,
-                                                                                                                    terminate=self.terminate,
-                                                                                                                    )
+        (time, state, control, flat, imu_measurements, imu_gt, mocap_measurements, state_estimate, exit, camera_measurements) = simulate(self.world,
+                                                                                                                            self.vehicle.initial_state,
+                                                                                                                            self.vehicle,
+                                                                                                                            self.controller,
+                                                                                                                            self.trajectory,
+                                                                                                                            self.wind_profile,
+                                                                                                                            self.imu,
+                                                                                                                            self.mocap,
+                                                                                                                            self.estimator,
+                                                                                                                            self.t_final,
+                                                                                                                            self.t_step,
+                                                                                                                            self.safety_margin,
+                                                                                                                            self.use_mocap,
+                                                                                                                            terminate=self.terminate,
+                                                                                                                            camera=self.camera,
+                                                                                                                            )
         if verbose:
             # Print relevant statistics or simulator status indicators here
             print('-------------------RESULTS-----------------------')
             print('SIM TIME -- %3.2f seconds | WALL TIME -- %3.2f seconds' % (min(self.t_final, time[-1]) , (clk.time()-start_time)))
             print('EXIT STATUS -- '+exit.value)
+            if camera_measurements is not None:
+                print('CAMERA -- captured %d frames at %s Hz' % (len(camera_measurements['time']),
+                                                                 getattr(self.camera, 'frame_rate', None) or ('every step (%g Hz)' % self.sim_rate)))
 
-        self.result = dict(time=time, state=state, control=control, flat=flat, imu_measurements=imu_measurements, imu_gt=imu_gt, mocap_measurements=mocap_measurements, state_estimate=state_estimate, exit=exit)
+        # Camera measurements are kept in their own entry so that they are not
+        # included in save_to_csv()/unpack_sim_data(); images are far too large
+        # for a csv. Use save_camera_data() to save them instead.
+        self.result = dict(time=time, state=state, control=control, flat=flat, imu_measurements=imu_measurements, imu_gt=imu_gt, mocap_measurements=mocap_measurements, state_estimate=state_estimate, exit=exit, camera_measurements=camera_measurements)
 
-        visualizer = Plotter(self.result, self.world)
+        visualizer = Plotter(self.result, self.world, self.camera)
 
         # Remove gif or mp4 in filename if it exists (the respective functions will add appropriate extensions)
         if fname is not None:
@@ -225,7 +243,7 @@ class Environment():
             visualizer.animate_results(fname=fname, animate_wind=animate_wind)
         if plot:
             # Do plotting here
-            visualizer.plot_results(fname=fname,plot_mocap=plot_mocap,plot_estimator=plot_estimator,plot_imu=plot_imu)
+            visualizer.plot_results(fname=fname,plot_mocap=plot_mocap,plot_estimator=plot_estimator,plot_imu=plot_imu,plot_camera=plot_camera)
             if not animate_bool:
                 plt.show()
 
@@ -234,6 +252,9 @@ class Environment():
     def save_to_csv(self, savepath=None):
         """
         Save the simulation data in self.results to a file.
+
+        Note that camera measurements (images etc.) are NOT included in the csv;
+        use save_camera_data() to save those.
         """
 
         if savepath is None:
@@ -247,6 +268,56 @@ class Environment():
                 savepath = savepath + ".csv"
             dataframe = unpack_sim_data(self.result)
             dataframe.to_csv(savepath)
+
+    def save_camera_data(self, savepath=None, save_pngs=False):
+        """
+        Save the camera measurements in self.result to a .npz archive, and
+        optionally the frames as png images.
+
+        Inputs:
+            savepath, path prefix for the saved files. ".npz" is appended if
+                missing. Defaults to "rotorpy_camera_results.npz".
+            save_pngs, if True, also writes each frame as
+                <savepath>_frames/frame_XXXXX.png.
+        """
+
+        if self.result is None or self.result.get('camera_measurements') is None:
+            print("Error: cannot save camera data since no camera measurements have been generated! Aborting save.")
+            return
+
+        if savepath is None:
+            savepath = "rotorpy_camera_results.npz"
+        if not savepath.endswith(".npz"):
+            savepath = savepath + ".npz"
+
+        cm = self.result['camera_measurements']
+        data = {
+            'time': cm['time'],
+            'image': cm['image'],
+            'visible_mask': cm['visible_mask'],
+            'projected': cm['projected'],
+            'depth': cm['depth'],
+            'keypoints': np.array(cm['keypoints'], dtype=object),
+            'keypoint_depths': np.array(cm['keypoint_depths'], dtype=object),
+            'visible_features': np.array(cm['visible_features'], dtype=object),
+        }
+        if cm.get('colors') is not None:
+            data['colors'] = cm['colors']
+        if cm.get('visible_colors') is not None:
+            data['visible_colors'] = np.array(cm['visible_colors'], dtype=object)
+        if cm.get('descriptors') is not None:
+            data['descriptors'] = cm['descriptors']
+        if cm.get('visible_descriptors') is not None:
+            data['visible_descriptors'] = np.array(cm['visible_descriptors'], dtype=object)
+        np.savez_compressed(savepath, **data)
+
+        if save_pngs:
+            frames_dir = savepath[:-len('.npz')] + '_frames'
+            os.makedirs(frames_dir, exist_ok=True)
+            for i, image in enumerate(cm['image']):
+                plt.imsave(os.path.join(frames_dir, 'frame_%05d.png' % i), image)
+
+        return
 
 
 ######## ENVIRONMENT FOR A SWARM OF VEHICLES ########
@@ -306,7 +377,8 @@ class EnvironmentBatch:
             from rotorpy.sensors.imu import BatchedImu
             self.imus = BatchedImu(
                 num_drones=self.vehicles.num_drones,
-                sampling_rate=self.sim_rate
+                sampling_rate=self.sim_rate,
+                device=self.vehicles.device,
             )
         else:
             self.imus = imus
@@ -329,18 +401,20 @@ class EnvironmentBatch:
             self.mocaps = BatchedMotionCapture(
                 num_drones=self.vehicles.num_drones,
                 sampling_rate=self.sim_rate,
-                mocap_params=mocap_params,
-                with_artifacts=False
+                mocap_params=[
+                    {key: torch.as_tensor(value, dtype=torch.float64,
+                                          device=self.vehicles.device)
+                     for key, value in mocap_params.items()}
+                    for _ in range(self.vehicles.num_drones)
+                ],
+                with_artifacts=[False] * self.vehicles.num_drones,
+                device=self.vehicles.device,
             )
         else:
             self.mocaps = mocaps
 
-        # Estimator (batched)
-        if estimators is None:
-            from rotorpy.estimators.nullestimator import BatchedNullEstimator
-            self.estimators = BatchedNullEstimator(self.vehicles.num_drones)
-        else:
-            self.estimators = estimators
+        # simulate_batch logs empty filter states when no estimator is supplied.
+        self.estimators = estimators
 
         self.initial_states: Optional[Dict[str, torch.Tensor]] = None
         self.result = None
@@ -401,6 +475,7 @@ class EnvironmentBatch:
             state_estimates,
             exit_status,
             exit_timesteps,
+            camera_measurements,
         ) = simulate_batch(
             world=self.world,
             initial_states=self.initial_states,
@@ -442,6 +517,7 @@ class EnvironmentBatch:
             state_estimate=state_estimates,
             exits=exit_status,
             exit_timesteps=exit_timesteps,
+            camera_measurements=camera_measurements,
         )
 
         # ---- Animate ----
@@ -466,6 +542,7 @@ class EnvironmentBatch:
             )
 
             if fname is not None:
+                fname = os.fspath(fname)
                 if fname.endswith(".gif"):
                     fname = fname[:-4]
                 elif fname.endswith(".mp4"):
@@ -493,11 +570,12 @@ class EnvironmentBatch:
             print("Error: cannot save if no results have been generated! Aborting save.")
             return
 
-        if ".csv" not in savepath:
+        savepath = os.fspath(savepath)
+        if not savepath.endswith(".csv"):
             savepath = savepath + ".csv"
 
-        dataframe = unpack_sim_data(self.result)
-        dataframe.to_csv(savepath)
+        dataframe = unpack_sim_data_batch(self.result)
+        dataframe.to_csv(savepath, index=False)
 
 
 ######## Unit test code for environments.py ########

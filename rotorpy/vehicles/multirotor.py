@@ -1052,7 +1052,7 @@ class BatchedMultirotor(object):
 
             # Angular control; vector units of N*m.
             Iw = self.params.inertia[idxs] @ state['w'][idxs].unsqueeze(-1).double()
-            tmp = -self.params.kp_att[idxs] * att_err - self.params.kd_att[idxs] * state['w']
+            tmp = -self.params.kp_att[idxs] * att_err - self.params.kd_att[idxs] * state['w'][idxs]
             cmd_moment = (self.params.inertia[idxs] @ tmp.unsqueeze(-1)).squeeze(-1) + torch.cross(state['w'][idxs],
                                                                                                    Iw.squeeze(-1),
                                                                                                    dim=-1)
@@ -1088,7 +1088,7 @@ class BatchedMultirotor(object):
 
             # Angular control; vector units of N*m.
             Iw = self.params.inertia[idxs] @ state['w'][idxs].unsqueeze(-1).double()
-            tmp = -self.params.kp_att[idxs] * att_err - self.params.kd_att[idxs] * state['w']
+            tmp = -self.params.kp_att[idxs] * att_err - self.params.kd_att[idxs] * state['w'][idxs]
             cmd_moment = (self.params.inertia[idxs] @ tmp.unsqueeze(-1)).squeeze(-1) + torch.cross(state['w'][idxs],
                                                                                                    Iw.squeeze(-1),
                                                                                                    dim=-1)

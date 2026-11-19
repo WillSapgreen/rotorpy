@@ -198,8 +198,8 @@ def main():
                              batched_trajs,
                              wind_profile,
                              batched_imu,
-                             batched_mocap,
-                             batched_wind_ekf,
+                             mocap=batched_mocap,
+                             estimator=batched_wind_ekf,
                              t_final=t_fs,
                              t_step=dt,
                              safety_margin=0.25,
@@ -213,11 +213,11 @@ def main():
     simulate_fn_states = results[1]
 
     # Contains the timesteps at which each drone terminated.
-    simulate_fn_done_times = results[-1]
-    print(f"FPS of batched simulation: {np.sum(simulate_fn_done_times)/(sim_fn_end_time - sim_fn_start_time):.2f}")
+    simulate_fn_done_times = results[9]
+    print(f"FPS of batched simulation was {np.sum(simulate_fn_done_times)/(sim_fn_end_time - sim_fn_start_time)}")
 
     # Contains the exit statuses for each drone.
-    exit_statuses = results[-2]
+    exit_statuses = results[8]
 
     #### Sequential Simulation ####
     print(f"==== Sequential Version ====")
@@ -292,16 +292,18 @@ def main():
     for j, sim_idx in enumerate(which_sim):
         ts = np.arange(trajectories[sim_idx].t_keyframes[-1] + dt, step=dt)
         end_t = simulate_fn_done_times[sim_idx]
+        batch_ts = results[0][:end_t, sim_idx]
+        seq_ts = np.arange(len(all_seq_states[int(sim_idx)]['x'])) * dt
 
         for dimension in range(3):
             # Position Plot (fig 1)
             ax[j][dimension].plot(ts, [trajectories[sim_idx].update(t)['x'][dimension] for t in ts], 'k--', alpha=0.5, label='ref')
-            ax[j][dimension].plot(ts, all_seq_states[int(sim_idx)]['x'][:,dimension], label='seq')
-            ax[j][dimension].plot(ts, get_data(simulate_fn_states, 'x', sim_idx, end_t, dimension), label='batch')
+            ax[j][dimension].plot(seq_ts, all_seq_states[int(sim_idx)]['x'][:,dimension], label='seq')
+            ax[j][dimension].plot(batch_ts, get_data(simulate_fn_states, 'x', sim_idx, end_t, dimension), label='batch')
 
             # Body Rate Plot (fig 2)
-            ax2[j][dimension].plot(ts, all_seq_states[int(sim_idx)]['w'][:,dimension], label='seq')
-            ax2[j][dimension].plot(ts, get_data(simulate_fn_states, 'w', sim_idx, end_t, dimension), label='batch')
+            ax2[j][dimension].plot(seq_ts, all_seq_states[int(sim_idx)]['w'][:,dimension], label='seq')
+            ax2[j][dimension].plot(batch_ts, get_data(simulate_fn_states, 'w', sim_idx, end_t, dimension), label='batch')
 
             if j == 0:
                 ax[j][dimension].legend()

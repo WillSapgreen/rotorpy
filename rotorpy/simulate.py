@@ -616,7 +616,7 @@ def simulate_batch(
         # coordinators. Their post-exit samples are masked when packing logs.
         stopped_idxs = np.flatnonzero(done)
         for key in state[-1]:
-            state[-1][key][stopped_idxs] = state[-2][key][stopped_idxs]
+            state[-1][key][stopped_idxs] = state[-2][key][stopped_idxs].to(state[-1][key])
 
         # ---------
         # Coordinator path (optional)
@@ -646,14 +646,14 @@ def simulate_batch(
         else:
             control.append(controller.update(t_vec, state[-1], flat[-1], idxs=running_idxs.flatten()))
         for key in control[-1]:
-            control[-1][key][stopped_idxs] = control[-2][key][stopped_idxs]
+            control[-1][key][stopped_idxs] = control[-2][key][stopped_idxs].to(control[-1][key])
 
         statedot = vehicles.statedot(state[-1], control[-1], t_step, running_idxs.flatten())
         imu_measurements.append(imu.measurement(state[-1], statedot, running_idxs.flatten(), with_noise=True))
         imu_gt.append(imu.measurement(state[-1], statedot, running_idxs.flatten(), with_noise=False))
         for history in (imu_measurements, imu_gt):
             for key in history[-1]:
-                history[-1][key][stopped_idxs] = history[-2][key][stopped_idxs]
+                history[-1][key][stopped_idxs] = history[-2][key][stopped_idxs].to(history[-1][key])
 
         if camera is not None and time_array[-1][0] >= next_camera_time - 1e-9:
             capture_camera(float(time_array[-1][0]), running_idxs)
@@ -945,7 +945,7 @@ def world_collision_tensors(world, device, dtype):
             bounds = w.world.get('bounds', {}).get('extents')
             extents[b] = torch.tensor(bounds if bounds is not None else unbounded, device=device, dtype=dtype)
             blocks = w.world.get('blocks', [])
-            if not blocks:
+            if len(blocks) == 0:
                 continue
             r = torch.tensor(np.array([bl['extents'] for bl in blocks], dtype=np.float64),
                              device=device, dtype=dtype)
@@ -954,7 +954,7 @@ def world_collision_tensors(world, device, dtype):
         return lower, upper, extents
 
     blocks = world.world.get('blocks', [])
-    if blocks:
+    if len(blocks) > 0:
         r = torch.tensor(np.array([b['extents'] for b in blocks], dtype=np.float64),
                          device=device, dtype=dtype)
         lower = r[:, 0::2]

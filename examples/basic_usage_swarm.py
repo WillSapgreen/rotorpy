@@ -375,12 +375,13 @@ def save_basic_usage_swarm_csv(results, csv_path):
     T, B, _ = X.shape
 
     with open(csv_path, "w", newline="") as f:
+        stops = np.asarray(results.get("exit_timesteps", np.full(B, T)), dtype=int)
         w = csv.writer(f)
         w.writerow(["vehicle", "step", "x", "y", "z"])
 
         for i in range(B):
             Xi = X[:, i, :]  # (T,3)
-            for step in range(T):
+            for step in range(stops[i]):
                 w.writerow([i, step, Xi[step, 0], Xi[step, 1], Xi[step, 2]])
 
 
@@ -413,11 +414,27 @@ def save_swarm_animation(results, output_folder, output_name, world, target_posi
     target_positions_xy : (K, 2) array or None
         XY positions of targets. If provided, they are rendered as semi-transparent
         3D pyramids at z=0 throughout the animation.
+
+    Stopped agents remain at their final pose for display only; raw results
+    retain their post-exit padding.
     """
-    X = np.asarray(results["state"]["x"], dtype=float)      # (T, B, 3)
-    Q = np.asarray(results["state"]["q"], dtype=float)      # (T, B, 4)
-    W = np.asarray(results["state"]["wind"], dtype=float)   # (T, B, 3)
+    X = np.array(results["state"]["x"], dtype=float, copy=True)      # (T, B, 3)
+    Q = np.array(results["state"]["q"], dtype=float, copy=True)      # (T, B, 4)
+    W = np.array(results["state"]["wind"], dtype=float, copy=True)   # (T, B, 3)
     T_steps, B, _ = X.shape
+    stops = np.asarray(results.get("exit_timesteps", np.full(B, T_steps)), dtype=int)
+    for b, stop in enumerate(stops):
+        if not 1 <= stop <= T_steps:
+            raise ValueError(f"Agent {b} has invalid exit timestep {stop}.")
+        valid_q = np.isfinite(Q[:stop, b]).all(axis=-1) & (np.linalg.norm(Q[:stop, b], axis=-1) > 0)
+        if not valid_q.all():
+            bad_step = int(np.flatnonzero(~valid_q)[0])
+            raise ValueError(f"Agent {b} has an invalid quaternion at simulated step {bad_step}, before exit {stop}.")
+        for values in (X, Q, W):
+            values[stop:, b] = values[stop - 1, b]
+    held = np.flatnonzero(stops < T_steps)
+    if held.size:
+        print(f"[basic_usage_swarm] Animation holds stopped agents at their last pose: {held.tolist()}")
 
     # Build rotation matrices (T, B, 3, 3)
     rot = np.stack(
@@ -464,21 +481,22 @@ def save_per_agent_outputs(results, world, output_folder, num_vehicles, output_n
         os.makedirs(agent_dir, exist_ok=True)
 
         # Slice batched results → single-vehicle result dict
+        stop = int(results["exit_timesteps"][i]) if "exit_timesteps" in results else len(results["time"])
         agent_result = {
-            "time":               np.asarray(results["time"][:, i], dtype=float),
-            "state":              {k: np.asarray(v[:, i, ...], dtype=float)
+            "time":               np.asarray(results["time"][:stop, i], dtype=float),
+            "state":              {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["state"].items()},
-            "control":            {k: np.asarray(v[:, i, ...], dtype=float)
+            "control":            {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["control"].items()},
-            "flat":               {k: np.asarray(v[:, i, ...], dtype=float)
+            "flat":               {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["flat"].items()},
-            "imu_measurements":   {k: np.asarray(v[:, i, ...], dtype=float)
+            "imu_measurements":   {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["imu_measurements"].items()},
-            "imu_gt":             {k: np.asarray(v[:, i, ...], dtype=float)
+            "imu_gt":             {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["imu_gt"].items()},
-            "mocap_measurements": {k: np.asarray(v[:, i, ...], dtype=float)
+            "mocap_measurements": {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["mocap_measurements"].items()},
-            "state_estimate":     {k: np.asarray(v[:, i, ...], dtype=float)
+            "state_estimate":     {k: np.asarray(v[:stop, i, ...], dtype=float)
                                    for k, v in results["state_estimate"].items()},
         }
 

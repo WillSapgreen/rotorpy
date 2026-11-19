@@ -173,7 +173,7 @@ for k in range(n_minsnap):
     ])
 
     traj = MinSnap(
-        points=np.row_stack((x0, xf)),
+        points=np.vstack((x0, xf)),
         v_avg=1.0,
         verbose=False,
     )

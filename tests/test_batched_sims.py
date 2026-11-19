@@ -65,6 +65,14 @@ def test_batched_operators():
         print(f"Testing control abstraction = {abstraction}")
         batched_multirotor = BatchedMultirotor(batch_params, num_drones, batch_state, device, control_abstraction=abstraction)
         batch_next_state = batched_multirotor.step(batch_state, batch_control_inputs, 0.01)
+        if abstraction == "cmd_ctatt":
+            # Active drone IDs remain global after other drones terminate.
+            active = np.array([1, 4, 9])
+            full_commands = batched_multirotor.get_cmd_motor_speeds(
+                batch_state, batch_control_inputs, np.arange(num_drones))
+            active_commands = batched_multirotor.get_cmd_motor_speeds(
+                batch_state, batch_control_inputs, active)
+            torch.testing.assert_close(active_commands, full_commands[active])
         for j in range(num_drones):
             single_ctrlr = SE3Control(all_quad_params[j])
             seq_state = {key: batch_state[key][j].cpu().numpy() for key in batch_state.keys()}

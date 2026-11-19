@@ -404,3 +404,20 @@ def plot_map(ax, world_data, equal_aspect=True, color=None, edgecolor=None, alph
 
     return
 
+
+if __name__ == "__main__":
+
+    from rotorpy.world import World
+
+    # Get a list of the maps available under worlds.
+    available_worlds = [fname for fname in os.listdir(os.path.abspath(os.path.join(os.path.dirname(__file__),'..','worlds'))) if 'json' in fname]
+
+    # Load a random world
+    world_fname = np.random.choice(available_worlds)
+    world = World.from_file(os.path.abspath(os.path.join(os.path.dirname(__file__),'..','worlds', world_fname)))
+
+    # Plot the world.
+    (fig, ax) = plt.subplots(nrows=1, ncols=1, num="Top Down World View")
+    plot_map(ax, world.world)
+    ax.set_title(world_fname)
+    plt.show()

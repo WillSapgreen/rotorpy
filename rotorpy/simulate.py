@@ -45,9 +45,9 @@ def simulate(world,
              t_step,
              safety_margin,
              use_mocap,
-             camera=None,
              terminate=None,
-             print_fps=False):
+             print_fps=False,
+             camera=None):
     """
     Perform a vehicle simulation and return the numerical results.
 

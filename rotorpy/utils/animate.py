@@ -77,8 +77,8 @@ def _build_target_pyramid_collection(target_positions, half_base=0.15, height=0.
     return col
 
 def animate(time, position, rotation, wind, animate_wind, world, filename=None, blit=False, show_axes=True, close_on_finish=False,
-            target_positions=None, save_dir=None,
-            camera_images=None, camera_times=None, camera=None, frustum_scale=None):
+            camera_images=None, camera_times=None, camera=None, frustum_scale=None,
+            *, target_positions=None, save_dir=None):
     """
     Animate a completed simulation result based on the time, position, and
     rotation history. The animation may be viewed live or saved to a .mp4 video

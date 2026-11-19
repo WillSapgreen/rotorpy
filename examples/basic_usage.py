@@ -97,8 +97,8 @@ wind_ukf = WindUKF(quad_params)
 # An instance of the simulator can be generated as follows:
 sim_instance = Environment(vehicle=Multirotor(quad_params),           # vehicle object, must be specified.
                            controller=SE3Control(quad_params),        # controller object, must be specified.
-                           trajectory=TwoDLissajous(),                # trajectory object, must be specified.
-                           wind_profile=SinusoidWind(),               # OPTIONAL: wind profile object, if none is supplied it will choose no wind.
+                           trajectory=ThreeDCircularTraj(radius=np.array([3, 3, 0]), freq=np.array([0.15, 0.15, 0])),         # trajectory object, must be specified.
+                           wind_profile=SinusoidWind(),               # OPTIONAL: wind profile object, if none is supplied it will choose no wind. 
                            sim_rate     = 100,                        # OPTIONAL: The update frequency of the simulator in Hz. Default is 100 Hz.
                            imu          = imu,                        # OPTIONAL: imu sensor object, if none is supplied it will choose a default IMU sensor.
                            mocap        = mocap,                      # OPTIONAL: mocap sensor object, if none is supplied it will choose a default mocap.

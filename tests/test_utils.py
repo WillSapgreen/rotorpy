@@ -43,6 +43,38 @@ def test_animate():
     # Animate the results.
     ani = animate(T, position, rotation, wind=wind, animate_wind=False, world=world, filename=None, blit=False, show_axes=True, close_on_finish=True)
 
+def test_animate_path_filename(tmp_path, monkeypatch):
+    from rotorpy.utils.animate import animate, ClosingFuncAnimation
+    from rotorpy.world import World
+
+    saved = []
+
+    def record_save(self, filename, **kwargs):
+        saved.append(filename)
+        self._draw_was_started = True
+
+    monkeypatch.setattr(ClosingFuncAnimation, 'save', record_save)
+    times = np.linspace(0, 1, 10)
+    animate(times, np.zeros((10, 3)), np.tile(np.eye(3), (10, 1, 1)),
+            np.zeros((10, 3)), False, World.empty([-1, 1, -1, 1, -1, 1]),
+            filename=tmp_path / 'nested' / 'flight', close_on_finish=True)
+    assert saved == [str(tmp_path / 'nested' / 'flight.mp4')]
+    assert (tmp_path / 'nested').is_dir()
+
+
+def test_plot_map_world_bounds():
+    from rotorpy.utils.plotter import plot_map
+
+    fig, axes = plt.subplots(1, 2)
+    try:
+        plot_map(axes[0], test_world_data, world_bounds=False)
+        plot_map(axes[1], test_world_data, world_bounds=True)
+        assert len(axes[0].patches) == len(test_world_data['blocks'])
+        assert len(axes[1].patches) == len(test_world_data['blocks']) + 1
+    finally:
+        plt.close(fig)
+
+
 def test_numpy_encoding():
     from rotorpy.utils.numpy_encoding import NumpyJSONEncoder, to_ndarray
 

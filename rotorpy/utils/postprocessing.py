@@ -87,6 +87,24 @@ def unpack_sim_data(result):
 
     return df
 
+def unpack_sim_data_batch(result):
+    """Flatten valid batched samples into rows with a zero-based agent_id."""
+    histories = ('state', 'control', 'flat', 'imu_measurements', 'imu_gt',
+                 'mocap_measurements', 'state_estimate')
+    frames = []
+    for agent_id, stop in enumerate(result['exit_timesteps']):
+        stop = int(stop)
+        agent_result = {'time': result['time'][:stop, agent_id]}
+        for name in histories:
+            agent_result[name] = {
+                key: value[:stop, agent_id] for key, value in result[name].items()
+            }
+        frame = unpack_sim_data(agent_result)
+        frame.insert(0, 'agent_id', agent_id)
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
 def save_sim_data(result, filename="output.csv"):
     """
     Saves the data in result as a csv file for post processing.
